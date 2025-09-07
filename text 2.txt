@@ -1,0 +1,595 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CADDe – “Who’s your CADDe?”</title>
+<style>
+  :root{
+    --electric:#00BFFF;
+    --royal:#002b66;
+    --bg:#ffffff;
+    --toolbar:#1f1f1f;
+    --glow:0 0 10px var(--electric), 0 0 20px var(--electric);
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:#f5f5f5; font-family:Inter,Arial,system-ui,sans-serif;
+    user-select:none; -webkit-user-select:none;
+  }
+  #toolbar{
+    height:56px; background:var(--toolbar); padding:8px;
+    display:flex; align-items:center; gap:8px; position:relative; z-index:5;
+  }
+  .tool-button{
+    width:42px; height:42px; border-radius:8px; display:flex; align-items:center; justify-content:center;
+    border:2px solid var(--royal); background:#0a7bff; color:var(--royal); font-weight:800; font-size:18px;
+    box-shadow:0 0 5px #0a7bff; cursor:pointer;
+  }
+  .tool-button.active{ box-shadow:0 0 12px #ffd700, inset 0 0 0 2px #ffd700 }
+  #unitWrap{ color:#fff; margin-left:10px; display:flex; align-items:center; gap:6px }
+  #canvas-container{ position:relative; width:100%; height:calc(100vh - 56px); background:#fff; overflow:hidden }
+  svg#drawingCanvas{ width:100%; height:100%; display:block; background:var(--bg) }
+  #overlayRect{ fill:transparent; pointer-events:all }
+  /* Watermark */
+  #watermark{
+    position:absolute; bottom:10px; right:10px; text-align:right; z-index:1;
+    font-weight:900; font-size:32px; color:rgba(0,43,102,0.08); font-style:italic; pointer-events:none
+  }
+  #watermark span{ display:block; font-size:14px; color:rgba(0,191,255,0.15) }
+  /* Mock Camera */
+  #mockCamera{
+    display:none; position:absolute; inset:0; background:#000; color:#fff; z-index:10;
+    align-items:center; justify-content:center; flex-direction:column; gap:8px; padding:12px;
+  }
+  #mockCamera img{ max-width:88%; border:2px solid var(--electric) }
+  /* Menus */
+  .menu{
+    position:absolute; top:56px; right:10px; background:#fff; border:2px solid var(--royal);
+    padding:10px; z-index:20; display:none; border-radius:8px; min-width:260px
+  }
+  #gridMenu{ right:auto; left:10px }
+  .menu label{ display:block; font-size:13px; color:#222; margin:6px 0 2px }
+  select, input[type="number"], input[type="text"]{ width:100%; padding:6px; border:1px solid #ccc; border-radius:6px }
+  /* Neon grid style (applied to grid lines) */
+  .neon{ stroke:var(--electric); stroke-width:1; filter:url(#neonGlow) }
+  /* Layer Mods overlay */
+  #layerOverlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.85); z-index:100; display:none; color:#fff;
+    backdrop-filter: blur(2px);
+  }
+  #layerPanel{
+    position:absolute; inset:20px; background:#101317; border:2px solid var(--electric);
+    border-radius:12px; padding:12px; display:flex; flex-direction:column; gap:10px;
+  }
+  #layerHeader{ display:flex; align-items:center; justify-content:space-between }
+  #layerHeader h2{ margin:0; font-size:18px }
+  #layerHeader .actions{ display:flex; gap:8px }
+  #layerHeader button{
+    padding:8px 10px; border-radius:8px; border:2px solid var(--royal); background:#0a7bff; color:var(--royal); font-weight:800; cursor:pointer;
+  }
+  #layerTableWrap{ flex:1; overflow:auto; border:1px solid #223; border-radius:8px; }
+  table{ width:100%; border-collapse:separate; border-spacing:0 }
+  thead th{
+    position:sticky; top:0; background:#0d1218; padding:8px; text-align:left; border-bottom:1px solid #223; font-size:12px;
+  }
+  tbody td{ padding:6px; border-bottom:1px dashed #223; font-size:12px }
+  tbody tr:nth-child(even){ background:#0c0f14 }
+  .swatch{ width:22px; height:22px; border-radius:4px; border:1px solid #333; display:inline-block; vertical-align:middle; margin-right:6px }
+  .line-preview{ height:18px; border-bottom:2px solid #888 }
+  .closeX{ position:absolute; top:16px; right:16px; font-size:24px; cursor:pointer }
+  /* Helpers */
+  .rowFlex{ display:flex; align-items:center; gap:6px }
+</style>
+</head>
+<body>
+  <div id="toolbar">
+    <div id="dimensionTool" class="tool-button" title="Dimension">D</div>
+    <div id="circleTool" class="tool-button" title="Circle">◯</div>
+    <div id="squareTool" class="tool-button" title="Square">▢</div>
+    <div id="cameraTool" class="tool-button" title="Tape Measure">📏</div>
+    <div id="gridTool" class="tool-button" title="Grid">#</div>
+    <div id="layerTool" class="tool-button" title="Layer Mods">🗂</div>
+    <div id="settingsBtn" class="tool-button" title="Settings">⚙</div>
+    <div id="unitWrap">
+      Units:
+      <select id="unitToggle">
+        <option value="imperial">Imperial (fractions)</option>
+        <option value="metric">Metric</option>
+      </select>
+      <select id="metricUnits">
+        <option value="mm">mm</option>
+        <option value="cm">cm</option>
+        <option value="m">m</option>
+      </select>
+    </div>
+  </div>
+
+  <div id="canvas-container">
+    <svg id="drawingCanvas">
+      <defs>
+        <filter id="neonGlow">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="1.6" result="blur"/>
+          <feMerge>
+            <feMergeNode in="blur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </defs>
+      <!-- Grid group -->
+      <g id="gridLayer"></g>
+      <!-- Drawing group -->
+      <g id="drawLayer"></g>
+      <!-- Interaction overlay -->
+      <rect id="overlayRect" width="100%" height="100%"></rect>
+    </svg>
+    <div id="mockCamera">
+      <div style="font-size:18px">📏 Tape Measure (Mock)</div>
+      <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/7/7e/Living_room_with_couch.jpg/640px-Living_room_with_couch.jpg" alt="Mock Camera">
+      <div style="opacity:.8">Tap two points to imagine measuring; this is a visual mock.</div>
+    </div>
+    <div id="watermark">CADDe<span>“Who’s your CADDe?”</span></div>
+  </div>
+
+  <!-- Settings -->
+  <div id="settingsMenu" class="menu">
+    <label>Imperial Display</label>
+    <select id="imperialFormat">
+      <option value="fractional">Fractional (1/16")</option>
+      <option value="decimal">Decimal (in)</option>
+    </select>
+    <label>Precision</label>
+    <input type="number" id="precision" value="2" min="0" max="3">
+    <small>Note: This prototype treats 3 px ≈ 1 in and 1 px ≈ 1 mm (demo only).</small>
+  </div>
+
+  <!-- Grid menu -->
+  <div id="gridMenu" class="menu">
+    <label>Grid Type</label>
+    <select id="gridType">
+      <option value="none">None</option>
+      <option value="iso-left">Isometric Left</option>
+      <option value="iso-right">Isometric Right</option>
+      <option value="iso-center">Isometric Center</option>
+      <option value="orthographic">Orthographic</option>
+    </select>
+    <label>Spacing (px)</label>
+    <input type="number" id="gridSpacing" value="40" min="10" max="200">
+  </div>
+
+  <!-- Layer Mods overlay -->
+  <div id="layerOverlay">
+    <div id="layerPanel">
+      <div id="layerHeader">
+        <h2>Layer Mods – 30 Layers</h2>
+        <div class="actions">
+          <button id="exportLayers">Export JSON</button>
+          <button id="importLayers">Import JSON</button>
+          <button id="closeLayers">Close</button>
+        </div>
+      </div>
+      <div id="layerTableWrap">
+        <table id="layerTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Color</th>
+              <th>Line Weight</th>
+              <th>Line Type</th>
+              <th>Preview</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* ---------- State & Utilities ---------- */
+const svg = document.getElementById('drawingCanvas');
+const drawLayer = document.getElementById('drawLayer');
+const gridLayer = document.getElementById('gridLayer');
+
+let dimensionMode=false, cameraMode=false, circleMode=false, squareMode=false;
+let firstPoint=null, dragStart=null, rubberShape=null;
+
+const imperialFormatSel = document.getElementById('imperialFormat');
+const unitToggle = document.getElementById('unitToggle');
+const metricUnitsSel = document.getElementById('metricUnits');
+
+// Fractions
+function toFraction(num, denom=16){
+  const sign = num<0 ? -1 : 1;
+  num = Math.abs(num);
+  const whole = Math.floor(num);
+  let frac = Math.round((num - whole) * denom);
+  let w = whole * sign;
+  if(frac === 0) return String(w);
+  return \`\${w} \${frac}/\${denom}\`;
+}
+
+function formatLength(px){
+  if(unitToggle.value === 'metric'){
+    const unit = metricUnitsSel.value;
+    const mm = px; // demo scale
+    if(unit==='mm') return mm.toFixed(0)+' mm';
+    if(unit==='cm') return (mm/10).toFixed(1)+' cm';
+    return (mm/1000).toFixed(3)+' m';
+  }else{
+    const inches = px/3; // demo scale
+    if(imperialFormatSel.value==='fractional') return toFraction(inches)+'"';
+    const prec = parseInt(document.getElementById('precision').value||'2',10);
+    return inches.toFixed(prec)+' in';
+  }
+}
+
+function svgPoint(evt){
+  const rect = svg.getBoundingClientRect();
+  return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+}
+
+function makeSVG(tag, attrs={}){
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for(const k in attrs){ el.setAttribute(k, attrs[k]); }
+  return el;
+}
+
+/* ---------- Drawing Tools ---------- */
+const overlay = document.getElementById('overlayRect');
+
+overlay.addEventListener('pointerdown', (e)=>{
+  const p = svgPoint(e);
+  if(dimensionMode){
+    if(!firstPoint){ firstPoint = p; }
+    else{
+      const dx = p.x - firstPoint.x, dy = p.y - firstPoint.y;
+      const dist = Math.hypot(dx,dy);
+      // line
+      const line = makeSVG('line', {x1:firstPoint.x, y1:firstPoint.y, x2:p.x, y2:p.y, stroke:'#002b66', 'stroke-width':2});
+      const text = makeSVG('text', {x:(firstPoint.x+p.x)/2, y:(firstPoint.y+p.y)/2 - 6, fill:'#00BFFF', 'font-size':14, 'text-anchor':'middle'});
+      text.textContent = formatLength(dist);
+      drawLayer.appendChild(line); drawLayer.appendChild(text);
+      firstPoint=null;
+    }
+    return;
+  }
+  if(circleMode || squareMode){
+    dragStart = p;
+    if(rubberShape) rubberShape.remove();
+    if(circleMode){
+      rubberShape = makeSVG('circle', {cx:p.x, cy:p.y, r:1, fill:'none', stroke:'#002b66', 'stroke-width':2});
+    }else{
+      rubberShape = makeSVG('rect', {x:p.x, y:p.y, width:1, height:1, fill:'none', stroke:'#002b66', 'stroke-width':2});
+    }
+    drawLayer.appendChild(rubberShape);
+  }
+});
+
+overlay.addEventListener('pointermove', (e)=>{
+  if(!dragStart || !rubberShape) return;
+  const p = svgPoint(e);
+  if(circleMode){
+    const r = Math.hypot(p.x - dragStart.x, p.y - dragStart.y);
+    rubberShape.setAttribute('r', r);
+  }else if(squareMode){
+    const w = p.x - dragStart.x;
+    const h = p.y - dragStart.y;
+    const x = Math.min(dragStart.x, p.x);
+    const y = Math.min(dragStart.y, p.y);
+    rubberShape.setAttribute('x', x);
+    rubberShape.setAttribute('y', y);
+    rubberShape.setAttribute('width', Math.abs(w));
+    rubberShape.setAttribute('height', Math.abs(h));
+  }
+});
+
+overlay.addEventListener('pointerup', (e)=>{
+  dragStart = null; rubberShape = null;
+});
+
+/* ---------- Buttons: pointerdown for reliability ---------- */
+function toggle(btnId, flag){
+  const el = document.getElementById(btnId);
+  el.classList.toggle('active', flag);
+}
+
+document.getElementById('dimensionTool').addEventListener('pointerdown', ()=>{
+  dimensionMode = !dimensionMode; circleMode=false; squareMode=false;
+  toggle('dimensionTool', dimensionMode);
+  toggle('circleTool', false); toggle('squareTool', false);
+});
+
+document.getElementById('circleTool').addEventListener('pointerdown', ()=>{
+  circleMode = !circleMode; dimensionMode=false; squareMode=false;
+  toggle('circleTool', circleMode);
+  toggle('dimensionTool', false); toggle('squareTool', false);
+});
+
+document.getElementById('squareTool').addEventListener('pointerdown', ()=>{
+  squareMode = !squareMode; dimensionMode=false; circleMode=false;
+  toggle('squareTool', squareMode);
+  toggle('dimensionTool', false); toggle('circleTool', false);
+});
+
+document.getElementById('cameraTool').addEventListener('pointerdown', ()=>{
+  const mc = document.getElementById('mockCamera');
+  const active = mc.style.display === 'flex';
+  mc.style.display = active ? 'none' : 'flex';
+  toggle('cameraTool', !active);
+});
+
+document.getElementById('settingsBtn').addEventListener('pointerdown', ()=>{
+  const m = document.getElementById('settingsMenu');
+  m.style.display = (m.style.display==='block') ? 'none' : 'block';
+});
+
+document.getElementById('gridTool').addEventListener('pointerdown', ()=>{
+  const m = document.getElementById('gridMenu');
+  m.style.display = (m.style.display==='block') ? 'none' : 'block';
+});
+
+document.getElementById('layerTool').addEventListener('pointerdown', ()=>{
+  document.getElementById('layerOverlay').style.display = 'block';
+});
+
+document.getElementById('closeLayers').addEventListener('pointerdown', ()=>{
+  document.getElementById('layerOverlay').style.display = 'none';
+});
+
+/* ---------- Grid Drawing ---------- */
+function clearGrid(){
+  while(gridLayer.firstChild) gridLayer.removeChild(gridLayer.firstChild);
+}
+
+function drawGrid(type, spacing){
+  clearGrid();
+  if(type==='none') return;
+  const w = svg.clientWidth || svg.viewBox.baseVal.width || 1200;
+  const h = svg.clientHeight || svg.viewBox.baseVal.height || 800;
+
+  function addLine(x1,y1,x2,y2){
+    gridLayer.appendChild(makeSVG('line', {x1,y1,x2,y2, class:'neon'}));
+  }
+
+  if(type==='orthographic'){
+    for(let x=0; x<=w; x+=spacing) addLine(x,0,x,h);
+    for(let y=0; y<=h; y+=spacing) addLine(0,y,w,y);
+  }else{
+    const ang = (type==='iso-left') ? -30 : (type==='iso-right' ? 30 : 30);
+    const rad = ang*Math.PI/180;
+    for(let x=-w; x<w*2; x+=spacing){
+      addLine(x,0, x+h*Math.tan(rad), h);
+    }
+    if(type==='iso-center'){
+      for(let x=-w; x<w*2; x+=spacing){
+        addLine(x,0, x-h*Math.tan(rad), h);
+      }
+    }
+  }
+}
+
+document.getElementById('gridType').addEventListener('change', (e)=>{
+  drawGrid(e.target.value, parseInt(document.getElementById('gridSpacing').value,10));
+});
+document.getElementById('gridSpacing').addEventListener('change', ()=>{
+  drawGrid(document.getElementById('gridType').value, parseInt(document.getElementById('gridSpacing').value,10));
+});
+
+/* ---------- Layer Mods: table build (30 rows) ---------- */
+const colors = [
+  '#FF0000','#8B0000','#FF7F00','#FF4500','#FFD700','#FFFF99','#32CD32','#228B22','#008080','#00FFFF',
+  '#87CEEB','#4169E1','#000080','#800080','#EE82EE','#FF00FF','#FF69B4','#FA8072','#8B4513','#D2B48C',
+  '#FFD700','#C0C0C0','#808080','#333333','#000000','#FFFFFF','#40E0D0','#4B0082','#7FFF00','#DC143C'
+];
+const weights = ['0.1px','0.2px','0.3px','0.4px','0.5px','0.6px','0.7px','0.8px','0.9px','1px',
+  '1.5px','2px','2.5px','3px','3.5px','4px','4.5px','5px','6px','7px',
+  '8px','9px','10px','12px','14px','16px','18px','20px','24px','30px'];
+const lineTypes = [
+  'solid','dash-short','dash-long','dotted','dash-dot','dash-2dot','underscore','dash-dotfilled',
+  'hatch-45','hatch--45','hatch-vert','dash-double','dots-spaced','dash-mixed','dashdot-wide',
+  'thick-thin','block','shade','alt-dot-dash','dots-dash-mix','hatch-dash','big-dots',
+  'tiny-dash-dot-dot','dash-spaced','dense-shade','zigzag','dashdot-rapid','dots-longdash','dot-dash-repeat','double-heavy'
+];
+
+function linePatternCSS(type, color='#999', width='2px'){
+  if(type==='solid') return { strokeDasharray:'' };
+  if(type==='dash-short') return { strokeDasharray:'6 6' };
+  if(type==='dash-long') return { strokeDasharray:'14 10' };
+  if(type==='dotted') return { strokeDasharray:'1 8', strokeLinecap:'round' };
+  if(type==='dash-dot') return { strokeDasharray:'10 6 2 6' };
+  if(type==='dash-2dot') return { strokeDasharray:'12 6 2 6 2 6' };
+  if(type==='underscore') return { strokeDasharray:'10 8' };
+  if(type==='dash-dotfilled') return { strokeDasharray:'12 4 2 4' };
+  if(type==='dash-double') return { strokeDasharray:'4 4 12 4' };
+  if(type==='dots-spaced') return { strokeDasharray:'1 14', strokeLinecap:'round' };
+  if(type==='dash-mixed') return { strokeDasharray:'16 6 8 6' };
+  if(type==='dashdot-wide') return { strokeDasharray:'18 8 2 8' };
+  if(type==='thick-thin') return { strokeDasharray:'18 6 2 6' };
+  if(type==='alt-dot-dash') return { strokeDasharray:'12 6 2 6' };
+  if(type==='dots-dash-mix') return { strokeDasharray:'1 8 14 8', strokeLinecap:'round' };
+  if(type==='big-dots') return { strokeDasharray:'1 18', strokeLinecap:'round' };
+  if(type==='tiny-dash-dot-dot') return { strokeDasharray:'10 4 2 4 2 4' };
+  if(type==='dash-spaced') return { strokeDasharray:'12 10' };
+  if(type==='dashdot-rapid') return { strokeDasharray:'8 4 2 4' };
+  if(type==='dots-longdash') return { strokeDasharray:'1 8 18 8', strokeLinecap:'round' };
+  if(type==='dot-dash-repeat') return { strokeDasharray:'2 6 12 6' };
+  if(type==='double-heavy') return { strokeDasharray:'2 4' };
+
+  return { pattern:type };
+}
+
+function buildLayerTable(){
+  const tbody = document.querySelector('#layerTable tbody');
+  tbody.innerHTML = '';
+  for(let i=1;i<=30;i++){
+    const tr = document.createElement('tr');
+
+    const tdIndex = document.createElement('td'); tdIndex.textContent = i;
+
+    const tdName = document.createElement('td');
+    const nameInput = document.createElement('input'); nameInput.type='text'; nameInput.placeholder='Layer name';
+    tdName.appendChild(nameInput);
+
+    const tdColor = document.createElement('td');
+    const colorSel = document.createElement('select');
+    colors.forEach(c=>{
+      const opt = document.createElement('option');
+      opt.value=c; opt.textContent=c;
+      colorSel.appendChild(opt);
+    });
+    const sw = document.createElement('span'); sw.className='swatch'; sw.style.background=colors[(i-1)%colors.length];
+    colorSel.value = colors[(i-1)%colors.length];
+    colorSel.addEventListener('change', ()=>{ sw.style.background = colorSel.value; updatePreview(); });
+    const colorWrap = document.createElement('div'); colorWrap.className='rowFlex';
+    colorWrap.appendChild(sw); colorWrap.appendChild(colorSel);
+    tdColor.appendChild(colorWrap);
+
+    const tdWeight = document.createElement('td');
+    const weightSel = document.createElement('select');
+    weights.forEach(w=>{
+      const opt = document.createElement('option'); opt.value=w; opt.textContent=w; weightSel.appendChild(opt);
+    });
+    weightSel.value = weights[(i-1)%weights.length];
+    tdWeight.appendChild(weightSel);
+
+    const tdType = document.createElement('td');
+    const typeSel = document.createElement('select');
+    lineTypes.forEach(t=>{
+      const opt = document.createElement('option'); opt.value=t; opt.textContent=t; typeSel.appendChild(opt);
+    });
+    typeSel.value = lineTypes[(i-1)%lineTypes.length];
+    tdType.appendChild(typeSel);
+
+    const tdPrev = document.createElement('td');
+    const prevSVG = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    prevSVG.setAttribute('width','140'); prevSVG.setAttribute('height','20');
+    const prevLine = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    prevLine.setAttribute('x1','4'); prevLine.setAttribute('y1','10');
+    prevLine.setAttribute('x2','136'); prevLine.setAttribute('y2','10');
+    prevSVG.appendChild(prevLine); tdPrev.appendChild(prevSVG);
+
+    function updatePreview(){
+      const color = colorSel.value, width = weightSel.value, type = typeSel.value;
+      prevLine.setAttribute('stroke', color);
+      prevLine.setAttribute('stroke-width', parseFloat(width));
+      prevLine.setAttribute('stroke-linecap','butt');
+      const patt = linePatternCSS(type, color, width);
+      if(patt.pattern){
+        prevSVG.innerHTML='';
+        if(type==='zigzag'){
+          const path = document.createElementNS('http://www.w3.org/2000/svg','path');
+          path.setAttribute('d','M4,16 L14,4 L24,16 L34,4 L44,16 L54,4 L64,16 L74,4 L84,16 L94,4 L104,16 L114,4 L124,16 L136,4');
+          path.setAttribute('stroke',color); path.setAttribute('fill','none'); path.setAttribute('stroke-width', parseFloat(width));
+          prevSVG.appendChild(path);
+        } else if(type.startsWith('hatch')){
+          for(let x=4; x<136; x+=8){
+            const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+            if(type==='hatch-45'){ l.setAttribute('x1',x); l.setAttribute('y1',18); l.setAttribute('x2',x+8); l.setAttribute('y2',2); }
+            else if(type==='hatch--45'){ l.setAttribute('x1',x); l.setAttribute('y1',2); l.setAttribute('x2',x+8); l.setAttribute('y2',18); }
+            else if(type==='hatch-vert'){ l.setAttribute('x1',x); l.setAttribute('y1',2); l.setAttribute('x2',x); l.setAttribute('y2',18); }
+            else if(type==='hatch-dash'){ l.setAttribute('x1',x); l.setAttribute('y1',2); l.setAttribute('x2',x+8); l.setAttribute('y2',2); }
+            l.setAttribute('stroke',color); l.setAttribute('stroke-width', parseFloat(width));
+            prevSVG.appendChild(l);
+          }
+        } else if(type.includes('shade')){
+          for(let x=4; x<136; x+=4){
+            const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+            l.setAttribute('x1',x); l.setAttribute('y1',2);
+            l.setAttribute('x2',x); l.setAttribute('y2',18);
+            l.setAttribute('stroke',color); l.setAttribute('stroke-width', 1);
+            l.setAttribute('opacity','0.25');
+            prevSVG.appendChild(l);
+          }
+        } else {
+          for(let x=4; x<136; x+=8){
+            const l = document.createElementNS('http://www.w3.org/2000/svg','line');
+            l.setAttribute('x1',x); l.setAttribute('y1',18);
+            l.setAttribute('x2',x+8); l.setAttribute('y2',2);
+            l.setAttribute('stroke',color); l.setAttribute('stroke-width', parseFloat(width));
+            prevSVG.appendChild(l);
+          }
+        }
+      }else{
+        prevSVG.innerHTML=''; prevSVG.appendChild(prevLine);
+        prevLine.setAttribute('stroke-dasharray', patt.strokeDasharray||'');
+        if(patt.strokeLinecap) prevLine.setAttribute('stroke-linecap', patt.strokeLinecap);
+      }
+    }
+    weightSel.addEventListener('change', updatePreview);
+    typeSel.addEventListener('change', updatePreview);
+    updatePreview();
+
+    tr.appendChild(tdIndex);
+    tr.appendChild(tdName);
+    tr.appendChild(tdColor);
+    tr.appendChild(tdWeight);
+    tr.appendChild(tdType);
+    tr.appendChild(tdPrev);
+    tbody.appendChild(tr);
+  }
+}
+
+buildLayerTable();
+
+// Export / Import JSON (layer definitions)
+document.getElementById('exportLayers').addEventListener('pointerdown', ()=>{
+  const rows = [...document.querySelectorAll('#layerTable tbody tr')];
+  const data = rows.map((tr,idx)=>{
+    const tds = tr.querySelectorAll('td');
+    return {
+      index: idx+1,
+      name: tds[1].querySelector('input').value || '',
+      color: tds[2].querySelector('select').value,
+      weight: tds[3].querySelector('select').value,
+      lineType: tds[4].querySelector('select').value
+    };
+  });
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download='cadde-layers.json'; a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('importLayers').addEventListener('pointerdown', ()=>{
+  const inp = document.createElement('input'); inp.type='file'; inp.accept='.json,application/json';
+  inp.onchange = ()=>{
+    const file = inp.files[0]; if(!file) return;
+    const reader = new FileReader();
+    reader.onload = ()=>{
+      try{
+        const arr = JSON.parse(reader.result);
+        const rows = [...document.querySelectorAll('#layerTable tbody tr')];
+        arr.slice(0,rows.length).forEach((item,i)=>{
+          const tds = rows[i].querySelectorAll('td');
+          tds[1].querySelector('input').value = item.name||'';
+          tds[2].querySelector('select').value = item.color||colors[0];
+          tds[3].querySelector('select').value = item.weight||weights[0];
+          tds[4].querySelector('select').value = item.lineType||lineTypes[0];
+          tds[2].querySelector('.swatch').style.background = tds[2].querySelector('select').value;
+          tds[3].querySelector('select').dispatchEvent(new Event('change'));
+        });
+      }catch(e){ alert('Invalid JSON'); }
+    };
+    reader.readAsText(file);
+  };
+  inp.click();
+});
+
+// Initial grid off
+drawGrid('none', 40);
+
+// Ensure SVG has a viewBox for consistent sizing
+window.addEventListener('load', ()=>{
+  const rect = svg.getBoundingClientRect();
+  svg.setAttribute('viewBox', \`0 0 \${rect.width} \${rect.height}\`);
+});
+
+window.addEventListener('resize', ()=>{
+  drawGrid(document.getElementById('gridType').value, parseInt(document.getElementById('gridSpacing').value,10));
+});
+</script>
+</body>
+</html>
